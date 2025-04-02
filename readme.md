@@ -1,0 +1,1 @@
+# a simple pipeline that pulls documents from a local directory and convert them into markdown #
