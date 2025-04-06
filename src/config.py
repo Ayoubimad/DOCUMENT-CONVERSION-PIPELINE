@@ -9,7 +9,6 @@ class Settings(BaseSettings):
     DOCLING_TIMEOUT: float
     INPUT_DIR: str
     OUTPUT_DIR: str
-    LOG_LEVEL: str
 
     @property
     def docling_url(self) -> str:

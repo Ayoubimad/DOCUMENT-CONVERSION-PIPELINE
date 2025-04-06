@@ -1,14 +1,11 @@
 import asyncio
-from typing import List, Optional
+from typing import Dict, List, Optional, Any, cast
 
 from docling.datamodel.base_models import OutputFormat
 from base_converter import DocumentConverter
 from document import Document
-from convertion_option import ConvertDocumentsOptions
+from conversion_option import ConvertDocumentsOptions
 from docling_client import DoclingClient
-import logging
-
-logger = logging.getLogger(__name__)
 
 
 class DoclingConverter(DocumentConverter):
@@ -26,34 +23,37 @@ class DoclingConverter(DocumentConverter):
         if OutputFormat.MARKDOWN not in self.options.to_formats:
             self.options.to_formats.append(OutputFormat.MARKDOWN)
 
-    def convert(self, input_source: str, **kwargs) -> Document:
+    def convert(self, input_source: str, **kwargs: Any) -> Document:
         """Convert a single document synchronously.
 
         Args:
             input_source: Path to the input document
+            **kwargs: Additional conversion options
 
         Returns:
             Document: The converted document
         """
-        response = self.client.convert_file(input_source, options=self.options)
-        return self._create_document(response)
+        # Use asyncio.run to properly manage the event loop lifecycle
+        return asyncio.run(self.convert_async(input_source, **kwargs))
 
-    def convert_all(self, input_sources: List[str], **kwargs) -> List[Document]:
+    def convert_all(self, input_sources: List[str], **kwargs: Any) -> List[Document]:
         """Convert multiple documents synchronously.
 
         Args:
             input_sources: List of paths to input documents
+            **kwargs: Additional conversion options
 
         Returns:
             List[Document]: List of converted documents
         """
-        return asyncio.run(self.convert_all_async(input_sources))
+        return asyncio.run(self.convert_all_async(input_sources, **kwargs))
 
-    async def convert_async(self, input_source: str, **kwargs) -> Document:
+    async def convert_async(self, input_source: str, **kwargs: Any) -> Document:
         """Convert a single document asynchronously.
 
         Args:
             input_source: Path to the input document
+            **kwargs: Additional conversion options
 
         Returns:
             Document: The converted document
@@ -62,32 +62,44 @@ class DoclingConverter(DocumentConverter):
         return self._create_document(response)
 
     async def convert_all_async(
-        self, input_sources: List[str], **kwargs
+        self, input_sources: List[str], **kwargs: Any
     ) -> List[Document]:
         """Convert multiple documents asynchronously.
 
         Args:
             input_sources: List of paths to input documents
+            **kwargs: Additional conversion options
 
         Returns:
             List[Document]: List of converted documents
         """
 
-        # this may produce an error if all documents in output are None
-
         async def safe_convert(input_source: str) -> Optional[Document]:
+            """Convert a document safely, catching exceptions.
+
+            Args:
+                input_source: Path to the input document
+
+            Returns:
+                Optional[Document]: The converted document or None if conversion failed
+            """
             try:
-                return await self.convert_async(input_source)
+                return await self.convert_async(input_source, **kwargs)
             except Exception as e:
-                logger.error(f"Failed to convert {input_source}: {str(e)}")
+                print(f"Failed to convert {input_source}: {str(e)}")
                 return None
 
         tasks = [safe_convert(input_source) for input_source in input_sources]
         results = await asyncio.gather(*tasks)
+        # Filter out None results
         return [doc for doc in results if doc is not None]
 
+    async def close(self) -> None:
+        """Close the client connection."""
+        await self.client.close()
+
     @staticmethod
-    def _create_document(response: dict) -> Document:
+    def _create_document(response: Dict[str, Any]) -> Document:
         """Create a Document from the API response.
 
         Args:
@@ -96,4 +108,13 @@ class DoclingConverter(DocumentConverter):
         Returns:
             Document: The created document
         """
-        return Document(content=response.get("document", {}).get("md_content", ""))
+        document = response.get("document", {})
+        content = document.get("md_content", "")
+        meta_data = document.get("meta_data", {})
+
+        return Document(
+            content=content,
+            id=document.get("id"),
+            name=document.get("name"),
+            meta_data=meta_data or {},
+        )

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from base_client import BaseHttpClient
-from convertion_option import ConvertDocumentsOptions
+from conversion_option import ConvertDocumentsOptions
 from config import settings
 
 
@@ -74,7 +74,7 @@ class DoclingClient(BaseHttpClient):
             "files": (file_path.name, open(file_path, "rb"), "application/octet-stream")
         }
 
-        data = {}
+        data: Dict[str, Any] = {}
         if options:
             data["parameters"] = json.dumps(options.model_dump(exclude_none=True))
 

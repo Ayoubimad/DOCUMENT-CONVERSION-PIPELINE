@@ -1,6 +1,6 @@
-# Defines the input option for the API, copy-pasted from docling-serve
+# Defines the input option for the API
 # ref: https://github.com/docling-project/docling-serve/blob/main/docling_serve/datamodel/convert.py
-from typing import Annotated, Optional, Any
+from typing import Annotated, Optional, Any, List
 
 from pydantic import BaseModel, Field
 
@@ -18,8 +18,10 @@ ocr_engines_enum = get_ocr_factory().get_enum()
 
 
 class ConvertDocumentsOptions(BaseModel):
+    """Conversion options for document processing."""
+
     from_formats: Annotated[
-        list[InputFormat],
+        List[InputFormat],
         Field(
             description=(
                 "Input format(s) to convert from. String or list of strings. "
@@ -31,7 +33,7 @@ class ConvertDocumentsOptions(BaseModel):
     ] = list(InputFormat)
 
     to_formats: Annotated[
-        list[OutputFormat],
+        List[OutputFormat],
         Field(
             description=(
                 "Output format(s) to convert to. String or list of strings. "
@@ -52,7 +54,6 @@ class ConvertDocumentsOptions(BaseModel):
                 "Optional, defaults to Embedded."
             ),
             examples=[ImageRefMode.PLACEHOLDER.value],
-            # pattern="embedded|placeholder|referenced",
         ),
     ] = ImageRefMode.PLACEHOLDER
 
@@ -63,7 +64,6 @@ class ConvertDocumentsOptions(BaseModel):
                 "If enabled, the bitmap content will be processed using OCR. "
                 "Boolean. Optional, defaults to true"
             ),
-            # examples=[True],
         ),
     ] = True
 
@@ -74,7 +74,6 @@ class ConvertDocumentsOptions(BaseModel):
                 "If enabled, replace existing text with OCR-generated "
                 "text over content. Boolean. Optional, defaults to false."
             ),
-            # examples=[False],
         ),
     ] = False
 
@@ -87,12 +86,11 @@ class ConvertDocumentsOptions(BaseModel):
                 "Optional, defaults to easyocr."
             ),
             examples=[EasyOcrOptions.kind],
-            # pattern="easyocr|tesseract_cli|tesseract|ocrmac|rapidocr"
         ),
     ] = ocr_engines_enum(EasyOcrOptions.kind)
 
     ocr_lang: Annotated[
-        Optional[list[str]],
+        Optional[List[str]],
         Field(
             description=(
                 "List of languages used by the OCR engine. "
@@ -126,7 +124,6 @@ class ConvertDocumentsOptions(BaseModel):
                 "Optional, defaults to accurate."
             ),
             examples=[TableFormerMode.ACCURATE],
-            # pattern="fast|accurate",
         ),
     ] = TableFormerMode.ACCURATE
 
@@ -136,7 +133,6 @@ class ConvertDocumentsOptions(BaseModel):
             description=(
                 "Abort on error if enabled. Boolean. Optional, defaults to false."
             ),
-            # examples=[False],
         ),
     ] = False
 

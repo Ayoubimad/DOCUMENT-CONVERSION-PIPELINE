@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, List
+from typing import Any, List, Optional
 
 from document import Document
 
@@ -90,3 +90,15 @@ class DocumentConverter(ABC):
             NotImplementedError: If not implemented by subclass
         """
         raise NotImplementedError("Subclasses must implement convert_all_async()")
+
+    @abstractmethod
+    async def close(self) -> None:
+        """Close any resources used by the converter.
+
+        Should be called when the converter is no longer needed to ensure proper
+        resource cleanup.
+
+        Raises:
+            NotImplementedError: If not implemented by subclass
+        """
+        raise NotImplementedError("Subclasses must implement close()")
