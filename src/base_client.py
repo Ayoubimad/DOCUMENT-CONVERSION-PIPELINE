@@ -20,18 +20,21 @@ class BaseHttpClient(ABC):
     request handling, and resource cleanup.
     """
 
-    def __init__(self, base_url: str, timeout: float = 60.0):
+    def __init__(self, *, base_url: str, timeout: float = 60.0):
         """Initialize the HTTP client.
 
         Args:
             base_url: Base URL for the API
             timeout: Request timeout in seconds
         """
-        self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
-        self._client = httpx.AsyncClient(timeout=timeout)
         logger.debug(
-            f"Initialized HTTP client with base URL: {base_url}, default timeout: {timeout}s"
+            f"BaseHttpClient init with timeout={timeout} (type={type(timeout)})"
+        )
+        self.base_url = base_url.rstrip("/")
+        self.timeout = float(timeout)  # Ensure timeout is float
+        self._client = httpx.AsyncClient(timeout=self.timeout)
+        logger.debug(
+            f"Initialized HTTP client with base URL: {base_url}, default timeout: {self.timeout}s"
         )
 
     async def close(self) -> None:
@@ -71,24 +74,13 @@ class BaseHttpClient(ABC):
         """
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
 
-        # Use specified timeout or default
-        request_timeout = timeout or self.timeout
-        if timeout:
-            logger.debug(
-                f"Using custom timeout of {timeout}s for request to {endpoint}"
-            )
-
         try:
-            # Create a custom timeout for this specific request if needed
-            if timeout and timeout != self.timeout:
-                client_timeout = httpx.Timeout(timeout)
-                kwargs["timeout"] = client_timeout
 
             response = await self._client.request(method, url, **kwargs)
             response.raise_for_status()
             return response.json()
         except httpx.TimeoutException as e:
-            logger.error(f"Request timeout after {request_timeout}s for {method} {url}")
+            logger.error(f"Request timeout after {self.timeout}s for {method} {url}")
             raise
         except httpx.HTTPStatusError as e:
             status_code = e.response.status_code

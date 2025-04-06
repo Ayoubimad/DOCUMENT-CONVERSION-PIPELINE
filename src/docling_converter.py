@@ -6,7 +6,9 @@ handling and proper resource management for the underlying API client.
 
 import asyncio
 import logging
-from typing import Dict, List, Optional, Any, cast
+import os
+from typing import Dict, List, Optional, Any
+from pathlib import Path
 
 from docling.datamodel.base_models import OutputFormat
 from base_converter import DocumentConverter
@@ -26,9 +28,9 @@ class DoclingConverter(DocumentConverter):
         Args:
             options: Optional conversion options
         """
+        super().__init__()
         self.client = DoclingClient()
         self.options = options or ConvertDocumentsOptions()
-        # Ensure the output format is at least markdown
         if OutputFormat.MARKDOWN not in self.options.to_formats:
             self.options.to_formats.append(OutputFormat.MARKDOWN)
 
@@ -42,7 +44,6 @@ class DoclingConverter(DocumentConverter):
         Returns:
             Document: The converted document
         """
-        # Use asyncio.run to properly manage the event loop lifecycle
         return asyncio.run(self.convert_async(input_source, **kwargs))
 
     def convert_all(self, input_sources: List[str], **kwargs: Any) -> List[Document]:
@@ -67,8 +68,24 @@ class DoclingConverter(DocumentConverter):
         Returns:
             Document: The converted document
         """
-        response = await self.client.convert_file(input_source, options=self.options)
-        return self._create_document(response)
+        logger.info(f"Converting document: {input_source}")
+        file_path = Path(input_source)
+
+        try:
+            result = await self.client.convert_file(
+                file_path,
+                options=self.options,
+                timeout=self.client.timeout,
+            )
+
+            return self._create_document(result)
+
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout calling Docling API for {input_source}")
+            raise
+        except Exception as e:
+            logger.error(f"Error calling Docling API: {e}", exc_info=True)
+            raise
 
     async def convert_all_async(
         self, input_sources: List[str], **kwargs: Any
@@ -102,7 +119,6 @@ class DoclingConverter(DocumentConverter):
 
         tasks = [safe_convert(input_source) for input_source in input_sources]
         results = await asyncio.gather(*tasks)
-        # Filter out None results
         return [doc for doc in results if doc is not None]
 
     async def close(self) -> None:

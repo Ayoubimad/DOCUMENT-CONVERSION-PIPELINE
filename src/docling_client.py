@@ -9,6 +9,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+import os
 
 from base_client import BaseHttpClient
 from conversion_option import ConvertDocumentsOptions
@@ -31,11 +32,12 @@ class DoclingClient(BaseHttpClient):
             base_url: Optional base URL of the docling server (defaults to env setting)
             timeout: Optional request timeout in seconds (defaults to env setting)
         """
+
         super().__init__(
             base_url=base_url or settings.docling_url,
             timeout=timeout or settings.DOCLING_TIMEOUT,
         )
-        logger.debug(
+        logger.info(
             f"Initialized DoclingClient with URL: {self.base_url}, timeout: {self.timeout}s"
         )
 
@@ -89,19 +91,7 @@ class DoclingClient(BaseHttpClient):
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
 
-        # Log file size for debugging timeout issues
-        file_size = file_path.stat().st_size
-        file_size_mb = file_size / 1024 / 1024
-        logger.debug(f"Converting file: {file_path.name} ({file_size_mb:.2f} MB)")
-
-        # Adjust timeout for large files if not explicitly specified
-        if not timeout and file_size > 5 * 1024 * 1024:  # 5MB
-            # For large files, scale the timeout based on file size, if not explicitly set
-            scaled_timeout = min(
-                self.timeout * (file_size_mb / 5), settings.CONVERSION_MAX_TIMEOUT
-            )
-            logger.debug(f"Adjusting timeout for large file to {scaled_timeout:.2f}s")
-            timeout = scaled_timeout
+        logger.info(f"Converting file: {file_path.name}")
 
         files = {
             "files": (file_path.name, open(file_path, "rb"), "application/octet-stream")
@@ -133,13 +123,8 @@ class DoclingClient(BaseHttpClient):
         Returns:
             Dict[str, Any]: Conversion result
         """
-        # Estimate the size of the decoded content for logging
-        decoded_size_mb = (
-            len(base64_string) * 0.75 / 1024 / 1024
-        )  # base64 is ~4/3 the size of binary
-        logger.debug(
-            f"Converting base64 data for {filename} (approx. {decoded_size_mb:.2f} MB)"
-        )
+
+        logger.info(f"Converting base64 data for {filename}")
 
         payload = {
             "file_sources": [{"base64_string": base64_string, "filename": filename}],

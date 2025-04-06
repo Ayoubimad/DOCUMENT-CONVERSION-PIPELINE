@@ -14,143 +14,30 @@ import logging
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Tuple, Any, List, Set
+from typing import Optional, Dict, Tuple, Any
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from base_converter import DocumentConverter
 from document import Document
-
+from config import settings
 
 # Constants for file stability detection
-STABILITY_CHECKS = 3  # Number of consecutive stable checks required
-STABILITY_INTERVAL = 0.5  # Time between checks in seconds
-MAX_WAIT_TIME = 30  # Maximum time to wait for file stability (seconds)
+STABILITY_CHECKS = 10  # Number of consecutive stable checks required
+STABILITY_INTERVAL = 0.2  # Time between checks in seconds
+MAX_WAIT_TIME = 86400  # Maximum time to wait for file stability (seconds)
 MIN_GROWTH_RATE = (
     1024  # Minimum growth rate in bytes/second to consider a file still being written
 )
 # Use the configurable timeout from settings
-CONVERSION_TIMEOUT = settings.CONVERSION_MAX_TIMEOUT
 STATS_SAVE_INTERVAL = 300  # Save stats every 5 minutes (seconds)
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(name)s] [%(levelname)s] %(message)s"
 )
+
 logger = logging.getLogger(__name__)
-
-
-class FileStats:
-    """Class for tracking file conversion statistics."""
-
-    def __init__(self, stats_file: Optional[str] = None):
-        """Initialize file statistics tracker.
-
-        Args:
-            stats_file: Optional path to save statistics
-        """
-        self.stats_file = stats_file
-        self.processed_files: Set[str] = set()
-        self.successful_conversions: Set[str] = set()
-        self.failed_conversions: Set[str] = set()
-        self.file_types: Dict[str, int] = {}
-        self.processing_times: Dict[str, float] = {}
-        self.last_save_time = time.time()
-
-    def record_processing_start(self, file_path: str) -> None:
-        """Record the start of file processing.
-
-        Args:
-            file_path: Path of the file being processed
-        """
-        self.processed_files.add(file_path)
-
-        # Track file type
-        extension = Path(file_path).suffix.lower()
-        self.file_types[extension] = self.file_types.get(extension, 0) + 1
-
-        # Store start time for duration tracking
-        self.processing_times[file_path] = time.time()
-
-    def record_processing_result(self, file_path: str, success: bool) -> None:
-        """Record the result of file processing.
-
-        Args:
-            file_path: Path of the processed file
-            success: Whether processing was successful
-        """
-        if success:
-            self.successful_conversions.add(file_path)
-        else:
-            self.failed_conversions.add(file_path)
-
-        # Calculate processing duration
-        if file_path in self.processing_times:
-            start_time = self.processing_times[file_path]
-            duration = time.time() - start_time
-            self.processing_times[file_path] = duration
-
-        # Save stats periodically
-        if self.stats_file and time.time() - self.last_save_time > STATS_SAVE_INTERVAL:
-            self.save_stats()
-
-    def get_summary(self) -> Dict[str, Any]:
-        """Get a summary of processing statistics.
-
-        Returns:
-            Dict[str, Any]: Summary statistics
-        """
-        return {
-            "total_processed": len(self.processed_files),
-            "successful": len(self.successful_conversions),
-            "failed": len(self.failed_conversions),
-            "file_types": self.file_types,
-            "avg_processing_time": self._calculate_avg_time(),
-        }
-
-    def _calculate_avg_time(self) -> Dict[str, float]:
-        """Calculate average processing time by file type.
-
-        Returns:
-            Dict[str, float]: Average processing time by file extension
-        """
-        # Filter out entries that are still processing (have start time, not duration)
-        durations = {
-            k: v
-            for k, v in self.processing_times.items()
-            if isinstance(v, float) and v > 0
-        }
-
-        if not durations:
-            return {}
-
-        # Group by file extension
-        extension_times: Dict[str, List[float]] = {}
-        for file_path, time_value in durations.items():
-            ext = Path(file_path).suffix.lower()
-            if ext not in extension_times:
-                extension_times[ext] = []
-            extension_times[ext].append(time_value)
-
-        # Calculate averages
-        return {ext: sum(times) / len(times) for ext, times in extension_times.items()}
-
-    def save_stats(self) -> None:
-        """Save statistics to file if stats_file is configured."""
-        if not self.stats_file:
-            return
-
-        try:
-            summary = self.get_summary()
-            summary["timestamp"] = datetime.now().isoformat()
-
-            with open(self.stats_file, "w") as f:
-                json.dump(summary, f, indent=2)
-
-            self.last_save_time = time.time()
-            logger.debug(f"Saved processing statistics to {self.stats_file}")
-        except Exception as e:
-            logger.error(f"Failed to save statistics: {e}", exc_info=True)
 
 
 class DocumentEventHandler(FileSystemEventHandler):
@@ -163,41 +50,56 @@ class DocumentEventHandler(FileSystemEventHandler):
         self,
         converter: DocumentConverter,
         output_dir: str,
-        stats_file: Optional[str] = None,
     ):
         """Initialize the document event handler.
 
         Args:
             converter: The converter to use for document processing
             output_dir: The output directory to save converted documents
-            stats_file: Optional path to save conversion statistics
+
         """
         self.converter = converter
         self.output_dir = output_dir
-        self.queue: queue.Queue = queue.Queue()
+        self.queue: queue.Queue = queue.Queue()  # Queue for files to check stability
+        self.ready_queue: queue.Queue = (
+            queue.Queue()
+        )  # Queue for stable files ready to process
         self.is_running = True
         self.processor_thread: Optional[threading.Thread] = None
         self.file_sizes: Dict[str, Tuple[int, float, int, float]] = {}
-        self.stats = FileStats(stats_file)
 
     def process_queue(self) -> None:
         """Continuously process files from the queue until stopped."""
         while self.is_running:
             try:
-                file_path = self.queue.get(timeout=1)
-
-                if self._is_file_stable(file_path):
+                # First try to process any ready files
+                try:
+                    file_path = self.ready_queue.get_nowait()
+                    logger.info(f"Processing ready file: {file_path}")
                     self._run_process_file(file_path)
                     if file_path in self.file_sizes:
                         del self.file_sizes[file_path]
-                else:
-                    # Re-queue the file to check again later
-                    self.queue.put(file_path)
+                    self.ready_queue.task_done()
+                    continue
+                except queue.Empty:
+                    pass
 
-                self.queue.task_done()
-            except queue.Empty:
-                # No files in queue, continue waiting
-                continue
+                # Check stability of files
+                try:
+                    file_path = self.queue.get(timeout=1)
+                    logger.debug(f"Checking stability of file: {file_path}")
+                    if self._is_file_stable(file_path):
+                        logger.info(
+                            f"File is stable, moving to ready queue: {file_path}"
+                        )
+                        self.ready_queue.put(file_path)
+                    else:
+                        logger.debug(f"File not yet stable, re-queueing: {file_path}")
+                        self.queue.put(file_path)
+                    self.queue.task_done()
+                except queue.Empty:
+                    continue
+
             except Exception as e:
                 logger.error(f"Error processing file in queue: {e}", exc_info=True)
 
@@ -211,99 +113,74 @@ class DocumentEventHandler(FileSystemEventHandler):
             bool: True if the file size has stabilized, False otherwise
         """
         try:
-            # Basic file existence and size check
             if not os.path.exists(file_path):
-                logger.warning(f"File {file_path} does not exist")
+                logger.info(f"File {file_path} does not exist")
                 return False
 
             current_size = os.path.getsize(file_path)
             current_time = time.time()
 
             if current_size == 0:
-                logger.info(f"File {file_path} has zero size, waiting...")
+                logger.debug(f"File {file_path} has zero size")
                 return False
 
-            # First check for this file
             if file_path not in self.file_sizes:
-                # Store as (size, timestamp, consecutive_stable_checks, last_size_change_time)
+                logger.debug(
+                    f"First time seeing file {file_path}, size: {current_size}"
+                )
                 self.file_sizes[file_path] = (
                     current_size,
                     current_time,
                     0,
                     current_time,
                 )
-                logger.debug(
-                    f"Started tracking file {file_path} with size {current_size} bytes"
-                )
                 return False
 
-            # Get previous tracking data
             prev_size, first_seen_time, stable_count, last_change_time = (
                 self.file_sizes[file_path]
             )
 
-            # Check if max wait time exceeded
             if current_time - first_seen_time > MAX_WAIT_TIME:
                 logger.info(
-                    f"File {file_path} exceeded maximum wait time of {MAX_WAIT_TIME}s, processing anyway"
+                    f"File {file_path} exceeded max wait time, marking as stable"
                 )
                 return True
 
-            # Case 1: File size unchanged - potentially stable
             if current_size == prev_size:
                 stable_count += 1
                 logger.debug(
-                    f"File {file_path} size stable at {current_size} bytes (check {stable_count}/{STABILITY_CHECKS})"
+                    f"File {file_path} stable check {stable_count}/{STABILITY_CHECKS}"
                 )
 
-                # Update tracking data with new timestamp and incremented stable count
                 self.file_sizes[file_path] = (
                     current_size,
-                    first_seen_time,  # Keep original first seen time
+                    first_seen_time,
                     stable_count,
                     last_change_time,
                 )
 
-                # File is stable after enough consecutive stable checks
                 if stable_count >= STABILITY_CHECKS:
                     logger.info(
                         f"File {file_path} is stable after {stable_count} checks"
                     )
                     return True
 
-                # Not enough consecutive checks yet, wait before next check
                 time.sleep(STABILITY_INTERVAL)
                 return False
-
-            # Case 2: File size changed - reset stability counter
             else:
                 logger.debug(
-                    f"File {file_path} size changed from {prev_size} to {current_size} bytes"
+                    f"File {file_path} size changed from {prev_size} to {current_size}"
                 )
-
-                # Special case: If file is growing very slowly, it might be near completion
-                if current_size > prev_size and (current_time - last_change_time > 2.0):
-                    growth_rate = (current_size - prev_size) / (
-                        current_time - last_change_time
-                    )
-                    if growth_rate < MIN_GROWTH_RATE:
-                        logger.info(
-                            f"File {file_path} growing very slowly ({growth_rate:.2f} bytes/sec), considering it stable"
-                        )
-                        return True
-
-                # Update tracking data with reset stable count and new change time
                 self.file_sizes[file_path] = (
                     current_size,
-                    first_seen_time,  # Keep original first seen time
-                    0,  # Reset stability counter
-                    current_time,  # Update last change time
+                    first_seen_time,
+                    0,  # Reset stable count
+                    current_time,
                 )
-                time.sleep(STABILITY_INTERVAL)
                 return False
 
         except (FileNotFoundError, PermissionError) as e:
-            logger.warning(
+            logger.info(
                 f"File access error during stability check for {file_path}: {e}"
             )
             return False
@@ -319,8 +196,6 @@ class DocumentEventHandler(FileSystemEventHandler):
         Args:
             file_path: Path to the file to be processed.
         """
-        self.stats.record_processing_start(file_path)
-        success = False
 
         try:
             file_size = os.path.getsize(file_path)
@@ -328,118 +203,24 @@ class DocumentEventHandler(FileSystemEventHandler):
                 f"Starting async conversion of {file_path} ({file_size/1024/1024:.2f} MB)"
             )
 
-            # Preprocess the file
-            if not await self._preprocess_file(file_path):
-                logger.warning(
-                    f"Preprocessing failed for {file_path}, skipping conversion"
-                )
-                self.stats.record_processing_result(file_path, False)
-                return
-
-            # Adjust timeout based on file size
-            timeout = self._calculate_timeout(file_size)
-
-            # Convert the document with timeout
             try:
+                document = await self.converter.convert_async(file_path)
+                """
                 document = await asyncio.wait_for(
-                    self.converter.convert_async(file_path), timeout=timeout
+                    self.converter.convert_async(file_path),
+                    timeout=self.converter.client.timeout,
                 )
-
-                # Save the converted document
+                """
                 await self._save_document(document, file_path)
-                success = True
 
             except asyncio.TimeoutError:
                 logger.error(
-                    f"Conversion timeout for {file_path} after {timeout} seconds"
+                    f"Conversion timeout for {file_path} after {self.converter.client.timeout} seconds"
                 )
                 raise
 
         except Exception as e:
             logger.error(f"Failed to convert {file_path}: {e}", exc_info=True)
-        finally:
-            self.stats.record_processing_result(file_path, success)
-
-    def _calculate_timeout(self, file_size: int) -> float:
-        """Calculate an appropriate timeout based on file size.
-
-        Args:
-            file_size: Size of the file in bytes
-
-        Returns:
-            float: Timeout in seconds
-        """
-        # Base timeout - from environment
-        base_timeout = settings.DOCLING_TIMEOUT
-
-        # For files larger than 5MB, scale the timeout based on size
-        if file_size > 5 * 1024 * 1024:  # 5MB
-            # Scale factor based on file size (MB)
-            size_mb = file_size / (1024 * 1024)
-            # Scale timeout linearly with size, cap at max timeout
-            scaled_timeout = min(
-                base_timeout * (size_mb / 5), settings.CONVERSION_MAX_TIMEOUT
-            )
-            logger.debug(
-                f"Increased timeout for large file ({size_mb:.2f} MB): {scaled_timeout:.2f} seconds"
-            )
-            return scaled_timeout
-
-        return base_timeout
-
-    async def _preprocess_file(self, file_path: str) -> bool:
-        """Preprocess a file before conversion.
-
-        Performs initial validation, file type detection, and any necessary
-        preprocessing steps before conversion.
-
-        Args:
-            file_path: Path to the file to preprocess
-
-        Returns:
-            bool: True if preprocessing succeeded, False otherwise
-        """
-        try:
-            file_path_obj = Path(file_path)
-
-            # Check if file still exists
-            if not file_path_obj.exists():
-                logger.warning(f"File no longer exists: {file_path}")
-                return False
-
-            # Check file size
-            file_size = file_path_obj.stat().st_size
-            if file_size == 0:
-                logger.warning(f"File is empty: {file_path}")
-                return False
-
-            # Check file extension for supported types
-            # This could be expanded based on the converter's capabilities
-            extension = file_path_obj.suffix.lower()
-            supported_extensions = [
-                ".pdf",
-                ".docx",
-                ".doc",
-                ".txt",
-                ".rtf",
-                ".md",
-                ".html",
-            ]
-
-            if extension not in supported_extensions:
-                logger.warning(
-                    f"File type {extension} may not be supported: {file_path}"
-                )
-                # Not returning False here, still attempt conversion
-
-            logger.debug(
-                f"Preprocessing successful for {file_path} ({file_size} bytes, type: {extension})"
-            )
-            return True
-
-        except Exception as e:
-            logger.error(f"Error preprocessing file {file_path}: {e}", exc_info=True)
-            return False
 
     async def _save_document(self, document: Document, file_path: str) -> None:
         """Save the converted document to the output directory.
@@ -449,15 +230,13 @@ class DocumentEventHandler(FileSystemEventHandler):
             file_path: Original input file path for reference
         """
         try:
-            # Create output path with consistent Path objects
+
             input_path = Path(file_path)
             output_filename = f"{input_path.stem}.md"
             output_path = Path(self.output_dir) / output_filename
 
-            # Ensure output directory exists
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Write the document content to file
             output_path.write_text(document.content, encoding="utf-8")
 
             logger.info(
@@ -484,40 +263,35 @@ class DocumentEventHandler(FileSystemEventHandler):
             return
 
         try:
-            # Create a new event loop for this thread if needed
             try:
                 loop = asyncio.get_event_loop()
             except RuntimeError:
-                # No event loop in this thread, create one
+
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
 
-            # Run the async function using the appropriate method
             if loop.is_running():
-                # If we're in an async context, create a future
                 logger.debug(f"Using run_coroutine_threadsafe for {file_path}")
                 future = asyncio.run_coroutine_threadsafe(
                     self._process_file_async(file_path), loop
                 )
                 try:
-                    # Use a generous timeout for the overall processing
-                    future.result(timeout=settings.CONVERSION_MAX_TIMEOUT + 60)
+                    future.result(timeout=settings.DOCLING_TIMEOUT + 60)
                 except asyncio.TimeoutError:
                     logger.error(
-                        f"Conversion timeout for {file_path} after {settings.CONVERSION_MAX_TIMEOUT + 60} seconds"
+                        f"Conversion timeout for {file_path} after {settings.DOCLING_TIMEOUT + 60} seconds"
                     )
                 except Exception as e:
                     logger.error(
                         f"Error in async processing of {file_path}: {e}", exc_info=True
                     )
             else:
-                # If we're not in an async context, we can use run_until_complete
                 logger.debug(f"Using run_until_complete for {file_path}")
                 try:
                     loop.run_until_complete(self._process_file_async(file_path))
                 except asyncio.TimeoutError:
                     logger.error(
-                        f"Conversion timeout for {file_path} after {settings.CONVERSION_MAX_TIMEOUT} seconds"
+                        f"Conversion timeout for {file_path} after {settings.DOCLING_TIMEOUT} seconds"
                     )
                 except Exception as e:
                     logger.error(f"Error in processing {file_path}: {e}", exc_info=True)
@@ -540,9 +314,6 @@ class DocumentEventHandler(FileSystemEventHandler):
         self.is_running = False
         self.file_sizes.clear()
 
-        # Save final statistics
-        self.stats.save_stats()
-
         if self.processor_thread and self.processor_thread.is_alive():
             self.processor_thread.join(timeout=5)
             if self.processor_thread.is_alive():
@@ -555,12 +326,20 @@ class DocumentEventHandler(FileSystemEventHandler):
             event: The file system event
         """
         if event.is_directory:
+            logger.debug(f"Ignoring directory creation: {event.src_path}")
             return
 
-        time.sleep(0.1)  # Brief delay to let the file system stabilize
+        logger.info(
+            f"New file detected, waiting for filesystem to stabilize: {event.src_path}"
+        )
+        time.sleep(0.5)  # Brief delay to let the file system stabilize
 
         file_path = event.src_path
-        logger.info(f"Detected new file: {file_path}")
+        if not os.path.exists(file_path):
+            logger.warning(f"File no longer exists after delay: {file_path}")
+            return
+
+        logger.info(f"Queueing new file for processing: {file_path}")
         self.queue.put(file_path)
 
 
@@ -572,7 +351,6 @@ class DocumentWatcher:
         converter: DocumentConverter,
         input_dir: str,
         output_dir: str,
-        stats_file: Optional[str] = None,
     ):
         """Initialize the document watcher.
 
@@ -580,19 +358,17 @@ class DocumentWatcher:
             converter: The converter to use for document processing
             input_dir: The input directory to watch for new documents
             output_dir: The output directory to save converted documents
-            stats_file: Optional path to save conversion statistics
 
         Raises:
             ValueError: If input_dir does not exist or is not a directory
         """
-        # Validate input directory
+
         input_path = Path(input_dir)
         if not input_path.exists():
             raise ValueError(f"Input directory does not exist: {input_dir}")
         if not input_path.is_dir():
             raise ValueError(f"Input path is not a directory: {input_dir}")
 
-        # Ensure output directory exists
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
@@ -600,9 +376,7 @@ class DocumentWatcher:
         self.input_dir = str(input_path)
         self.output_dir = str(output_path)
         self.observer = Observer()
-        self.event_handler = DocumentEventHandler(
-            self.converter, self.output_dir, stats_file
-        )
+        self.event_handler = DocumentEventHandler(self.converter, self.output_dir)
         self.is_running = False
 
     def process_existing_files(self, process_all: bool = False) -> None:
@@ -620,7 +394,6 @@ class DocumentWatcher:
         input_path = Path(self.input_dir)
         output_path = Path(self.output_dir)
 
-        # Get all files in the input directory
         input_files = [f for f in input_path.glob("*") if f.is_file()]
 
         if not input_files:
@@ -629,16 +402,13 @@ class DocumentWatcher:
 
         logger.info(f"Found {len(input_files)} existing files in input directory")
 
-        # Check which files need processing
         files_to_process = []
         for input_file in input_files:
-            # Check if output file already exists
             output_file = output_path / f"{input_file.stem}.md"
 
             if process_all or not output_file.exists():
                 files_to_process.append(str(input_file))
 
-        # Queue the files for processing
         if files_to_process:
             logger.info(f"Queueing {len(files_to_process)} files for processing")
             for file_path in files_to_process:
@@ -659,16 +429,13 @@ class DocumentWatcher:
             raise RuntimeError("DocumentWatcher is already running")
 
         try:
-            # Start the event handler first
             self.event_handler.start_processing()
 
-            # Process existing files if requested
             if process_existing:
                 self.process_existing_files()
 
-            # Start watching for new files
             self.observer.schedule(
-                self.event_handler, path=self.input_dir, recursive=False
+                self.event_handler, path=self.input_dir, recursive=True
             )
             self.observer.start()
 
@@ -677,7 +444,6 @@ class DocumentWatcher:
             logger.info(f"Converted documents will be saved to: {self.output_dir}")
         except Exception as e:
             logger.error(f"Failed to start document watcher: {e}", exc_info=True)
-            # Attempt to clean up if start fails
             self.stop()
             raise
 
@@ -689,13 +455,11 @@ class DocumentWatcher:
 
         logger.info(f"Stopping document watcher for {self.input_dir}")
 
-        # Stop event handler first
         try:
             self.event_handler.stop()
         except Exception as e:
             logger.error(f"Error stopping event handler: {e}", exc_info=True)
 
-        # Then stop the observer
         try:
             self.observer.stop()
             self.observer.join(timeout=5)
