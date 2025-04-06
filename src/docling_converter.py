@@ -1,4 +1,11 @@
+"""
+Docling converter implementation that converts documents using the Docling API.
+Provides both synchronous and asynchronous methods for document conversion, with error
+handling and proper resource management for the underlying API client.
+"""
+
 import asyncio
+import logging
 from typing import Dict, List, Optional, Any, cast
 
 from docling.datamodel.base_models import OutputFormat
@@ -6,6 +13,8 @@ from base_converter import DocumentConverter
 from document import Document
 from conversion_option import ConvertDocumentsOptions
 from docling_client import DoclingClient
+
+logger = logging.getLogger(__name__)
 
 
 class DoclingConverter(DocumentConverter):
@@ -86,7 +95,9 @@ class DoclingConverter(DocumentConverter):
             try:
                 return await self.convert_async(input_source, **kwargs)
             except Exception as e:
-                print(f"Failed to convert {input_source}: {str(e)}")
+                logger.error(
+                    f"Failed to convert {input_source}: {str(e)}", exc_info=True
+                )
                 return None
 
         tasks = [safe_convert(input_source) for input_source in input_sources]

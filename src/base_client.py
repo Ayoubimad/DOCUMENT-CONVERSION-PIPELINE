@@ -1,3 +1,9 @@
+"""
+Base HTTP client module providing common functionality for API communication.
+Implements async HTTP request handling, error management, context manager support,
+and resource cleanup for clients that interact with document conversion APIs.
+"""
+
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 import httpx

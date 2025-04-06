@@ -1,3 +1,9 @@
+"""
+Base converter module defining the abstract interface for document converters.
+Provides the contract for both synchronous and asynchronous document conversion
+operations that concrete converter implementations must fulfill.
+"""
+
 from abc import ABC, abstractmethod
 from typing import Any, List, Optional
 

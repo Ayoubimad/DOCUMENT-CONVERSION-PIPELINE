@@ -1,3 +1,8 @@
+"""
+Configuration module for the document conversion pipeline. Loads application settings
+from environment variables or .env file using Pydantic settings.
+"""
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 

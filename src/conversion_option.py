@@ -1,5 +1,9 @@
-# Defines the input option for the API
-# ref: https://github.com/docling-project/docling-serve/blob/main/docling_serve/datamodel/convert.py
+"""
+Document conversion options module that defines the configuration options for converting
+documents using the Docling API. Provides a Pydantic model with strongly typed fields
+for all available conversion settings supported by the API.
+"""
+
 from typing import Annotated, Optional, Any, List
 
 from pydantic import BaseModel, Field

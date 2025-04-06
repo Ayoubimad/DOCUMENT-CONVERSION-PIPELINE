@@ -1,3 +1,8 @@
+"""
+Document model module containing the core document representation used throughout
+the conversion pipeline. Provides storage for document content, metadata and identifiers.
+"""
+
 from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field
 

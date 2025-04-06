@@ -1,3 +1,9 @@
+"""
+Docling API client module that provides specific implementation for interacting with
+the Docling document conversion service. Supports converting documents via URLs, local files,
+and base64-encoded content through the Docling HTTP API.
+"""
+
 import base64
 import json
 from pathlib import Path
