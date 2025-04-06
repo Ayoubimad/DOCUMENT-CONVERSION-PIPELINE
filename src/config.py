@@ -28,3 +28,5 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+print(settings.docling_url)
+print(settings.DOCLING_TIMEOUT)

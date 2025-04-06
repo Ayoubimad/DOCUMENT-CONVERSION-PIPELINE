@@ -27,11 +27,8 @@ class BaseHttpClient(ABC):
             base_url: Base URL for the API
             timeout: Request timeout in seconds
         """
-        logger.debug(
-            f"BaseHttpClient init with timeout={timeout} (type={type(timeout)})"
-        )
         self.base_url = base_url.rstrip("/")
-        self.timeout = float(timeout)  # Ensure timeout is float
+        self.timeout = timeout
         self._client = httpx.AsyncClient(timeout=self.timeout)
         logger.debug(
             f"Initialized HTTP client with base URL: {base_url}, default timeout: {self.timeout}s"

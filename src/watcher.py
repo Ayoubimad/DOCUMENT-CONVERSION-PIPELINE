@@ -11,8 +11,6 @@ import threading
 import time
 import asyncio
 import logging
-import json
-from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Tuple, Any
 
@@ -29,7 +27,6 @@ MAX_WAIT_TIME = 86400  # Maximum time to wait for file stability (seconds)
 MIN_GROWTH_RATE = (
     1024  # Minimum growth rate in bytes/second to consider a file still being written
 )
-# Use the configurable timeout from settings
 STATS_SAVE_INTERVAL = 300  # Save stats every 5 minutes (seconds)
 
 # Configure logging

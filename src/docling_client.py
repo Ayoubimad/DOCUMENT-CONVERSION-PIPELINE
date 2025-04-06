@@ -34,8 +34,8 @@ class DoclingClient(BaseHttpClient):
         """
 
         super().__init__(
-            base_url=base_url or settings.docling_url,
-            timeout=timeout or settings.DOCLING_TIMEOUT,
+            base_url=base_url,
+            timeout=timeout,
         )
         logger.info(
             f"Initialized DoclingClient with URL: {self.base_url}, timeout: {self.timeout}s"
@@ -65,7 +65,7 @@ class DoclingClient(BaseHttpClient):
         }
         logger.debug(f"Converting document from URL: {url}")
         return await self._make_request(
-            "POST", "v1alpha/convert/source", json=payload, timeout=timeout
+            "POST", "v1alpha/convert/source", json=payload, timeout=self.timeout
         )
 
     async def convert_file(

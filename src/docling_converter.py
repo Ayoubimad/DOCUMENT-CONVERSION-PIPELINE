@@ -15,6 +15,7 @@ from base_converter import DocumentConverter
 from document import Document
 from conversion_option import ConvertDocumentsOptions
 from docling_client import DoclingClient
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,9 @@ class DoclingConverter(DocumentConverter):
             options: Optional conversion options
         """
         super().__init__()
-        self.client = DoclingClient()
+        self.client = DoclingClient(base_url=settings.docling_url, timeout=8400)
+        print(self.client.timeout)
+        print(self.client.base_url)
         self.options = options or ConvertDocumentsOptions()
         if OutputFormat.MARKDOWN not in self.options.to_formats:
             self.options.to_formats.append(OutputFormat.MARKDOWN)
