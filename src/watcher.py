@@ -29,7 +29,8 @@ MAX_WAIT_TIME = 30  # Maximum time to wait for file stability (seconds)
 MIN_GROWTH_RATE = (
     1024  # Minimum growth rate in bytes/second to consider a file still being written
 )
-CONVERSION_TIMEOUT = 60  # Timeout for document conversion operations (seconds)
+# Use the configurable timeout from settings
+CONVERSION_TIMEOUT = settings.CONVERSION_MAX_TIMEOUT
 STATS_SAVE_INTERVAL = 300  # Save stats every 5 minutes (seconds)
 
 # Configure logging
@@ -322,7 +323,10 @@ class DocumentEventHandler(FileSystemEventHandler):
         success = False
 
         try:
-            logger.info(f"Starting async conversion of {file_path}")
+            file_size = os.path.getsize(file_path)
+            logger.info(
+                f"Starting async conversion of {file_path} ({file_size/1024/1024:.2f} MB)"
+            )
 
             # Preprocess the file
             if not await self._preprocess_file(file_path):
@@ -332,18 +336,56 @@ class DocumentEventHandler(FileSystemEventHandler):
                 self.stats.record_processing_result(file_path, False)
                 return
 
-            # Convert the document
-            document = await self.converter.convert_async(file_path)
+            # Adjust timeout based on file size
+            timeout = self._calculate_timeout(file_size)
 
-            # Save the converted document
-            await self._save_document(document, file_path)
+            # Convert the document with timeout
+            try:
+                document = await asyncio.wait_for(
+                    self.converter.convert_async(file_path), timeout=timeout
+                )
 
-            success = True
+                # Save the converted document
+                await self._save_document(document, file_path)
+                success = True
+
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"Conversion timeout for {file_path} after {timeout} seconds"
+                )
+                raise
 
         except Exception as e:
             logger.error(f"Failed to convert {file_path}: {e}", exc_info=True)
         finally:
             self.stats.record_processing_result(file_path, success)
+
+    def _calculate_timeout(self, file_size: int) -> float:
+        """Calculate an appropriate timeout based on file size.
+
+        Args:
+            file_size: Size of the file in bytes
+
+        Returns:
+            float: Timeout in seconds
+        """
+        # Base timeout - from environment
+        base_timeout = settings.DOCLING_TIMEOUT
+
+        # For files larger than 5MB, scale the timeout based on size
+        if file_size > 5 * 1024 * 1024:  # 5MB
+            # Scale factor based on file size (MB)
+            size_mb = file_size / (1024 * 1024)
+            # Scale timeout linearly with size, cap at max timeout
+            scaled_timeout = min(
+                base_timeout * (size_mb / 5), settings.CONVERSION_MAX_TIMEOUT
+            )
+            logger.debug(
+                f"Increased timeout for large file ({size_mb:.2f} MB): {scaled_timeout:.2f} seconds"
+            )
+            return scaled_timeout
+
+        return base_timeout
 
     async def _preprocess_file(self, file_path: str) -> bool:
         """Preprocess a file before conversion.
@@ -458,11 +500,11 @@ class DocumentEventHandler(FileSystemEventHandler):
                     self._process_file_async(file_path), loop
                 )
                 try:
-                    # Wait for the result with a timeout
-                    future.result(timeout=CONVERSION_TIMEOUT)
+                    # Use a generous timeout for the overall processing
+                    future.result(timeout=settings.CONVERSION_MAX_TIMEOUT + 60)
                 except asyncio.TimeoutError:
                     logger.error(
-                        f"Conversion timeout for {file_path} after {CONVERSION_TIMEOUT} seconds"
+                        f"Conversion timeout for {file_path} after {settings.CONVERSION_MAX_TIMEOUT + 60} seconds"
                     )
                 except Exception as e:
                     logger.error(
@@ -475,7 +517,7 @@ class DocumentEventHandler(FileSystemEventHandler):
                     loop.run_until_complete(self._process_file_async(file_path))
                 except asyncio.TimeoutError:
                     logger.error(
-                        f"Conversion timeout for {file_path} after {CONVERSION_TIMEOUT} seconds"
+                        f"Conversion timeout for {file_path} after {settings.CONVERSION_MAX_TIMEOUT} seconds"
                     )
                 except Exception as e:
                     logger.error(f"Error in processing {file_path}: {e}", exc_info=True)

@@ -8,6 +8,9 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 import httpx
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class BaseHttpClient(ABC):
@@ -27,6 +30,9 @@ class BaseHttpClient(ABC):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._client = httpx.AsyncClient(timeout=timeout)
+        logger.debug(
+            f"Initialized HTTP client with base URL: {base_url}, default timeout: {timeout}s"
+        )
 
     async def close(self) -> None:
         """Close the HTTP client connection and release resources."""
@@ -45,6 +51,7 @@ class BaseHttpClient(ABC):
         self,
         method: str,
         endpoint: str,
+        timeout: Optional[float] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Make an HTTP request to the API.
@@ -52,6 +59,7 @@ class BaseHttpClient(ABC):
         Args:
             method: HTTP method (GET, POST, etc.)
             endpoint: API endpoint path
+            timeout: Optional specific timeout for this request (overrides default)
             **kwargs: Additional arguments for the request
 
         Returns:
@@ -62,30 +70,41 @@ class BaseHttpClient(ABC):
             ValueError: If the response is not valid JSON
         """
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
+
+        # Use specified timeout or default
+        request_timeout = timeout or self.timeout
+        if timeout:
+            logger.debug(
+                f"Using custom timeout of {timeout}s for request to {endpoint}"
+            )
+
         try:
+            # Create a custom timeout for this specific request if needed
+            if timeout and timeout != self.timeout:
+                client_timeout = httpx.Timeout(timeout)
+                kwargs["timeout"] = client_timeout
+
             response = await self._client.request(method, url, **kwargs)
             response.raise_for_status()
             return response.json()
+        except httpx.TimeoutException as e:
+            logger.error(f"Request timeout after {request_timeout}s for {method} {url}")
+            raise
         except httpx.HTTPStatusError as e:
-            # Enhance error message with more context
             status_code = e.response.status_code
             error_msg = f"HTTP Error {status_code} for {method} {url}"
 
-            # Try to extract error details from response if possible
             try:
                 error_detail = e.response.json()
                 error_msg += f": {error_detail}"
             except (ValueError, KeyError):
-                # If we can't parse the JSON or find expected keys
                 if e.response.text:
-                    error_msg += f": {e.response.text[:200]}"  # Include part of the response text
+                    error_msg += f": {e.response.text[:200]}"
 
-            # Re-raise with enhanced error message
             raise httpx.HTTPStatusError(
                 error_msg, request=e.request, response=e.response
             ) from e
         except httpx.RequestError as e:
-            # Handle network/connection errors
             raise httpx.RequestError(
                 f"Request failed for {method} {url}: {str(e)}", request=e.request
             ) from e
@@ -95,12 +114,14 @@ class BaseHttpClient(ABC):
         self,
         file_path: Path,
         options: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Convert a file using the API.
 
         Args:
             file_path: Path to the file to convert
             options: Conversion options
+            timeout: Optional specific timeout for this conversion
 
         Returns:
             Dict[str, Any]: Conversion result
