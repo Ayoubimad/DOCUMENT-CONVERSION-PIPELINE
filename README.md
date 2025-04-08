@@ -73,6 +73,7 @@ Configure the application using the following command-line arguments:
 document-conversion-pipeline/
 ├── src/
 │   ├── __init__.py
+│   ├── .env                # Environment configuration
 │   ├── main.py             # Application entry point
 │   ├── config.py           # Configuration handling
 │   ├── document.py         # Document model
@@ -81,8 +82,7 @@ document-conversion-pipeline/
 │   ├── base_converter.py   # Base converter interface
 │   ├── docling_converter.py # Docling document converter
 │   ├── conversion_option.py # Document conversion options
-│   └── watcher.py          # Directory watcher
-├── .env                    # Environment configuration
+│   └── watcher.py          # File System Event Handler
 └── README.md               # This file
 ```
 
