@@ -4,7 +4,7 @@ A Python application for monitoring a directory and automatically converting doc
 
 ## Overview
 
-This application watches a specified input directory for new document files, processes them through the Docling API, and saves the converted markdown output to an output directory.
+This application watches a specified input directory for new document files, processes them through the [Docling API](https://github.com/docling-project/docling-serve), and saves the converted markdown output to an output directory.
 
 ## Features
 
