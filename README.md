@@ -1,4 +1,4 @@
-# Document Conversion Pipeline
+# A simple Document Conversion Pipeline
 
 A Python application for monitoring a directory and automatically converting documents using the Docling API.
 
