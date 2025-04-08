@@ -21,7 +21,7 @@ This application watches a specified input directory for new document files, pro
 Configure the application using environment variables, either set directly or via a `.env` file:
 
 ```plaintext
-DOCLING_HOST=localhost
+DOCLING_HOST=localhost:5001 
 DOCLING_PORT=8000
 DOCLING_TIMEOUT=60.0
 INPUT_DIR=/path/to/watch
@@ -48,7 +48,8 @@ OUTPUT_DIR=/path/to/save
 Run the application:
 
 ```bash
-python -m src.main
+cd src
+python main.py
 ```
 
 The application will:
