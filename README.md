@@ -91,4 +91,7 @@ To support additional document converters:
 
 1. Create a new converter class that implements `DocumentConverter`.
 2. Implement all required methods.
-3. Update `main.py` to use your new converter. 
+3. Update `main.py` to use your new converter.
+
+### TODO
+docling_converter.py: convert and convert_all should be sync 
