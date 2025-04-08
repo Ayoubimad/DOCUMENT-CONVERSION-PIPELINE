@@ -11,11 +11,6 @@ This application watches a specified input directory for new document files, pro
 - **File Watching**: Automatically detects new files in the watched directory.
 - **Stability Detection**: Ensures files are completely written before processing.
 
-## Architecture
-
-- **Document Converter**: Utilizes the Docling API for document conversion.
-- **File Watcher**: Monitors directories for new files and initiates processing.
-
 ## Configuration
 
 Configure the application using environment variables, either set directly or via a `.env` file:
@@ -95,4 +90,6 @@ To support additional document converters:
 3. Update `main.py` to use your new converter.
 
 ### TODO
-docling_converter.py: convert and convert_all should be sync 
+1. docling_converter.py: convert and convert_all should be sync
+2. A retry mechanism if a given conversion fails
+
