@@ -1,8 +1,7 @@
 """
 Document watcher module that monitors input directories for new files, detects when
 files are fully written, processes them using a document converter, and saves the
-results to an output directory. Includes file stability detection, statistics tracking,
-and async processing capabilities.
+results to an output directory.
 """
 
 import os
@@ -11,8 +10,10 @@ import threading
 import time
 import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Optional, Dict, Tuple, Any
+from typing import Optional, Dict, Tuple, Any, List, Set
+from collections import defaultdict
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -20,16 +21,17 @@ from base_converter import DocumentConverter
 from document import Document
 from config import settings
 
-# Constants for file stability detection
-STABILITY_CHECKS = 10  # Number of consecutive stable checks required
-STABILITY_INTERVAL = 0.2  # Time between checks in seconds
-MAX_WAIT_TIME = 86400  # Maximum time to wait for file stability (seconds)
-MIN_GROWTH_RATE = (
-    1024  # Minimum growth rate in bytes/second to consider a file still being written
-)
-STATS_SAVE_INTERVAL = 300  # Save stats every 5 minutes (seconds)
+# Performance tuning constants
+STABILITY_CHECKS = 3  # Reduced from 10 to 3 for faster processing
+STABILITY_INTERVAL = 0.1  # Reduced from 0.2 to 0.1 seconds
+MAX_WAIT_TIME = 3600  # Reduced from 86400 to 3600 seconds (1 hour)
+MIN_GROWTH_RATE = 1024  # Minimum growth rate in bytes/second
+BATCH_SIZE = 32  # Number of files to process in a batch
+BATCH_TIMEOUT = 2.0  # Maximum time to wait for batch completion
+MAX_WORKERS = os.cpu_count() or 1  # Maximum number of worker threads based on CPU cores
 
-# Configure logging
+print(f"MAX_WORKERS: {MAX_WORKERS}")
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(name)s] [%(levelname)s] %(message)s"
 )
@@ -38,93 +40,115 @@ logger = logging.getLogger(__name__)
 
 
 class DocumentEventHandler(FileSystemEventHandler):
-    """Event handler for document file system events.
-
-    Detects new or modified files and processes them using the provided document converter.
-    """
+    """Event handler for document file system events with batch processing support."""
 
     def __init__(
         self,
         converter: DocumentConverter,
         output_dir: str,
     ):
-        """Initialize the document event handler.
-
-        Args:
-            converter: The converter to use for document processing
-            output_dir: The output directory to save converted documents
-
-        """
+        """Initialize the document event handler."""
         self.converter = converter
         self.output_dir = output_dir
-        self.queue: queue.Queue = queue.Queue()  # Queue for files to check stability
-        self.ready_queue: queue.Queue = (
-            queue.Queue()
-        )  # Queue for stable files ready to process
+        self.queue: queue.Queue = queue.Queue()
+        self.ready_queue: queue.Queue = queue.Queue()
         self.is_running = True
         self.processor_thread: Optional[threading.Thread] = None
         self.file_sizes: Dict[str, Tuple[int, float, int, float]] = {}
+        self.batch_lock = threading.Lock()
+        self.batch_event = threading.Event()
+        self.current_batch: Set[str] = set()
+        self.thread_pool = ThreadPoolExecutor(max_workers=MAX_WORKERS)
+        self.processing_files: Dict[str, asyncio.Task] = {}
+
+    async def process_batch_async(self, batch: List[str]) -> None:
+        """Process a batch of files asynchronously.
+
+        Args:
+            batch: List of file paths to process
+        """
+        try:
+            tasks = []
+            for file_path in batch:
+                if not Path(file_path).exists():
+                    continue
+                task = asyncio.create_task(self._process_file_async(file_path))
+                self.processing_files[file_path] = task
+                tasks.append(task)
+
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        except Exception as e:
+            logger.error(f"Error processing batch: {e}", exc_info=True)
+        finally:
+            for file_path in batch:
+                self.processing_files.pop(file_path, None)
 
     def process_queue(self) -> None:
-        """Continuously process files from the queue until stopped."""
+        """Continuously process files from the queue with batch support."""
+        current_batch: List[str] = []
+        last_batch_time = time.time()
+
         while self.is_running:
             try:
-                # First try to process any ready files
                 try:
-                    file_path = self.ready_queue.get_nowait()
-                    logger.info(f"Processing ready file: {file_path}")
-                    self._run_process_file(file_path)
-                    if file_path in self.file_sizes:
-                        del self.file_sizes[file_path]
-                    self.ready_queue.task_done()
-                    continue
+                    while len(current_batch) < BATCH_SIZE:
+                        file_path = self.ready_queue.get_nowait()
+                        current_batch.append(file_path)
+                        self.ready_queue.task_done()
                 except queue.Empty:
                     pass
 
-                # Check stability of files
+                current_time = time.time()
+                if len(current_batch) >= BATCH_SIZE or (
+                    current_batch and current_time - last_batch_time >= BATCH_TIMEOUT
+                ):
+                    if current_batch:
+                        logger.info(f"Processing batch of {len(current_batch)} files")
+                        self._process_batch(current_batch)
+                        current_batch = []
+                        last_batch_time = current_time
+
                 try:
                     file_path = self.queue.get(timeout=1)
-                    logger.debug(f"Checking stability of file: {file_path}")
                     if self._is_file_stable(file_path):
-                        logger.info(
-                            f"File is stable, moving to ready queue: {file_path}"
-                        )
                         self.ready_queue.put(file_path)
                     else:
-                        logger.debug(f"File not yet stable, re-queueing: {file_path}")
                         self.queue.put(file_path)
                     self.queue.task_done()
                 except queue.Empty:
                     continue
 
             except Exception as e:
-                logger.error(f"Error processing file in queue: {e}", exc_info=True)
+                logger.error(f"Error in queue processor: {e}", exc_info=True)
+                current_batch = []
+
+    def _process_batch(self, batch: List[str]) -> None:
+        """Process a batch of files using the thread pool."""
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.process_batch_async(batch))
+        except Exception as e:
+            logger.error(f"Error processing batch: {e}", exc_info=True)
+        finally:
+            for file_path in batch:
+                if file_path in self.file_sizes:
+                    del self.file_sizes[file_path]
 
     def _is_file_stable(self, file_path: str) -> bool:
-        """Check if a file has finished being written by monitoring size stability.
-
-        Args:
-            file_path: Path to the file to check
-
-        Returns:
-            bool: True if the file size has stabilized, False otherwise
-        """
+        """Check if a file has finished being written using optimized stability detection."""
         try:
             if not os.path.exists(file_path):
-                logger.info(f"File {file_path} does not exist")
                 return False
 
             current_size = os.path.getsize(file_path)
             current_time = time.time()
 
             if current_size == 0:
-                logger.debug(f"File {file_path} has zero size")
                 return False
 
             if file_path not in self.file_sizes:
-                logger.debug(
-                    f"First time seeing file {file_path}, size: {current_size}"
-                )
                 self.file_sizes[file_path] = (
                     current_size,
                     current_time,
@@ -137,166 +161,60 @@ class DocumentEventHandler(FileSystemEventHandler):
                 self.file_sizes[file_path]
             )
 
+            if current_size < 1024 * 1024 and current_size == prev_size:  # 1MB
+                return True
+
             if current_time - first_seen_time > MAX_WAIT_TIME:
-                logger.info(
-                    f"File {file_path} exceeded max wait time, marking as stable"
-                )
                 return True
 
             if current_size == prev_size:
                 stable_count += 1
-                logger.debug(
-                    f"File {file_path} stable check {stable_count}/{STABILITY_CHECKS}"
-                )
-
                 self.file_sizes[file_path] = (
                     current_size,
                     first_seen_time,
                     stable_count,
                     last_change_time,
                 )
+                return stable_count >= STABILITY_CHECKS
 
-                if stable_count >= STABILITY_CHECKS:
-                    logger.info(
-                        f"File {file_path} is stable after {stable_count} checks"
-                    )
-                    return True
-
-                time.sleep(STABILITY_INTERVAL)
-                return False
-            else:
-                logger.debug(
-                    f"File {file_path} size changed from {prev_size} to {current_size}"
-                )
-                self.file_sizes[file_path] = (
-                    current_size,
-                    first_seen_time,
-                    0,  # Reset stable count
-                    current_time,
-                )
-                return False
-
-        except (FileNotFoundError, PermissionError) as e:
-            logger.info(
-                f"File access error during stability check for {file_path}: {e}"
+            self.file_sizes[file_path] = (
+                current_size,
+                first_seen_time,
+                0,
+                current_time,
             )
             return False
+
         except Exception as e:
-            logger.error(
-                f"Error checking file stability for {file_path}: {e}", exc_info=True
-            )
+            logger.error(f"Error checking file stability: {e}", exc_info=True)
             return False
 
     async def _process_file_async(self, file_path: str) -> None:
-        """Process a single file using the converter asynchronously.
-
-        Args:
-            file_path: Path to the file to be processed.
-        """
-
+        """Process a single file using the converter asynchronously."""
         try:
             file_size = os.path.getsize(file_path)
-            logger.info(
-                f"Starting async conversion of {file_path} ({file_size/1024/1024:.2f} MB)"
-            )
+            logger.info(f"Converting {file_path} ({file_size/1024/1024:.2f} MB)")
 
-            try:
-                document = await self.converter.convert_async(file_path)
-                """
-                document = await asyncio.wait_for(
-                    self.converter.convert_async(file_path),
-                    timeout=self.converter.client.timeout,
-                )
-                """
-                await self._save_document(document, file_path)
-
-            except asyncio.TimeoutError:
-                logger.error(
-                    f"Conversion timeout for {file_path} after {self.converter.client.timeout} seconds"
-                )
-                raise
+            document = await self.converter.convert_async(file_path)
+            await self._save_document(document, file_path)
 
         except Exception as e:
             logger.error(f"Failed to convert {file_path}: {e}", exc_info=True)
 
     async def _save_document(self, document: Document, file_path: str) -> None:
-        """Save the converted document to the output directory.
-
-        Args:
-            document: The converted document to save
-            file_path: Original input file path for reference
-        """
+        """Save the converted document to the output directory."""
         try:
-
             input_path = Path(file_path)
             output_filename = f"{input_path.stem}.md"
             output_path = Path(self.output_dir) / output_filename
 
             output_path.parent.mkdir(parents=True, exist_ok=True)
-
             output_path.write_text(document.content, encoding="utf-8")
 
-            logger.info(
-                f"Successfully converted and saved {file_path} to {output_path}"
-            )
+            logger.info(f"Saved {file_path} to {output_path}")
 
-        except IOError as e:
-            logger.error(
-                f"Error writing output file for {file_path}: {e}", exc_info=True
-            )
         except Exception as e:
-            logger.error(
-                f"Unexpected error saving document from {file_path}: {e}", exc_info=True
-            )
-
-    def _run_process_file(self, file_path: str) -> None:
-        """Run the async process_file method in the appropriate event loop.
-
-        Args:
-            file_path: Path to the file to be processed.
-        """
-        if not Path(file_path).exists():
-            logger.warning(f"File {file_path} no longer exists, skipping processing")
-            return
-
-        try:
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-            if loop.is_running():
-                logger.debug(f"Using run_coroutine_threadsafe for {file_path}")
-                future = asyncio.run_coroutine_threadsafe(
-                    self._process_file_async(file_path), loop
-                )
-                try:
-                    future.result(timeout=settings.DOCLING_TIMEOUT + 60)
-                except asyncio.TimeoutError:
-                    logger.error(
-                        f"Conversion timeout for {file_path} after {settings.DOCLING_TIMEOUT + 60} seconds"
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Error in async processing of {file_path}: {e}", exc_info=True
-                    )
-            else:
-                logger.debug(f"Using run_until_complete for {file_path}")
-                try:
-                    loop.run_until_complete(self._process_file_async(file_path))
-                except asyncio.TimeoutError:
-                    logger.error(
-                        f"Conversion timeout for {file_path} after {settings.DOCLING_TIMEOUT} seconds"
-                    )
-                except Exception as e:
-                    logger.error(f"Error in processing {file_path}: {e}", exc_info=True)
-        except Exception as e:
-            logger.error(
-                f"Error setting up async environment for {file_path}: {e}",
-                exc_info=True,
-            )
+            logger.error(f"Error saving document from {file_path}: {e}", exc_info=True)
 
     def start_processing(self) -> None:
         """Start the queue processor in a separate thread."""
@@ -306,37 +224,26 @@ class DocumentEventHandler(FileSystemEventHandler):
         logger.info("File processing thread started")
 
     def stop(self) -> None:
-        """Stop the queue processor."""
-        logger.info("Stopping file processing thread")
+        """Stop the queue processor and clean up resources."""
+        logger.info("Stopping file processing")
         self.is_running = False
         self.file_sizes.clear()
 
         if self.processor_thread and self.processor_thread.is_alive():
             self.processor_thread.join(timeout=5)
-            if self.processor_thread.is_alive():
-                logger.warning("File processing thread did not terminate cleanly")
+
+        self.thread_pool.shutdown(wait=False)
 
     def on_created(self, event: Any) -> None:
-        """Handle file creation events.
-
-        Args:
-            event: The file system event
-        """
+        """Handle file creation events."""
         if event.is_directory:
-            logger.debug(f"Ignoring directory creation: {event.src_path}")
             return
-
-        logger.info(
-            f"New file detected, waiting for filesystem to stabilize: {event.src_path}"
-        )
-        time.sleep(0.5)  # Brief delay to let the file system stabilize
 
         file_path = event.src_path
         if not os.path.exists(file_path):
-            logger.warning(f"File no longer exists after delay: {file_path}")
             return
 
-        logger.info(f"Queueing new file for processing: {file_path}")
+        logger.debug(f"Queueing new file: {file_path}")
         self.queue.put(file_path)
 
 

@@ -100,6 +100,7 @@ class DoclingClient(BaseHttpClient):
         data: Dict[str, Any] = {}
         if options:
             data["parameters"] = json.dumps(options.model_dump(exclude_none=True))
+            # logger.info(f"Conversion options: {data['parameters']}")
 
         return await self._make_request(
             "POST", "v1alpha/convert/file", files=files, data=data, timeout=timeout

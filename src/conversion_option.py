@@ -57,7 +57,7 @@ class ConvertDocumentsOptions(BaseModel):
                 f"Allowed values: {', '.join([v.value for v in ImageRefMode])}. "
                 "Optional, defaults to Embedded."
             ),
-            examples=[ImageRefMode.PLACEHOLDER.value],
+            examples=[ImageRefMode.PLACEHOLDER],
         ),
     ] = ImageRefMode.PLACEHOLDER
 
@@ -168,11 +168,11 @@ class ConvertDocumentsOptions(BaseModel):
         Field(
             description=(
                 "If enabled, images will be extracted from the document. "
-                "Boolean. Optional, defaults to true."
+                "Boolean. Optional, defaults to false."
             ),
-            examples=[True],
+            examples=[False],
         ),
-    ] = True
+    ] = False
 
     images_scale: Annotated[
         float,
@@ -209,11 +209,11 @@ class ConvertDocumentsOptions(BaseModel):
         Field(
             description=(
                 "If enabled, classify pictures in documents. "
-                "Boolean. Optional, defaults to true."
+                "Boolean. Optional, defaults to false."
             ),
-            examples=[True],
+            examples=[False],
         ),
-    ] = True
+    ] = False
 
     do_picture_description: Annotated[
         bool,
@@ -224,4 +224,4 @@ class ConvertDocumentsOptions(BaseModel):
             ),
             examples=[True],
         ),
-    ] = True
+    ] = False
