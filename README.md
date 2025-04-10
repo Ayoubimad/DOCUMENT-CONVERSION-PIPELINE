@@ -1,20 +1,15 @@
-# Document Conversion Pipeline
+# A simple Document Conversion Pipeline
 
 A Python application for monitoring a directory and automatically converting documents using the Docling API.
 
 ## Overview
 
-This application watches a specified input directory for new document files, processes them through the Docling API, and saves the converted markdown output to an output directory.
+This application watches a specified input directory for new document files, processes them through the [Docling API](https://github.com/docling-project/docling-serve), and saves the converted markdown output to an output directory.
 
 ## Features
 
 - **File Watching**: Automatically detects new files in the watched directory.
 - **Stability Detection**: Ensures files are completely written before processing.
-
-## Architecture
-
-- **Document Converter**: Utilizes the Docling API for document conversion.
-- **File Watcher**: Monitors directories for new files and initiates processing.
 
 ## Configuration
 
@@ -48,7 +43,8 @@ OUTPUT_DIR=/path/to/save
 Run the application:
 
 ```bash
-python -m src.main
+cd src
+python main.py
 ```
 
 The application will:
@@ -72,6 +68,7 @@ Configure the application using the following command-line arguments:
 document-conversion-pipeline/
 ├── src/
 │   ├── __init__.py
+│   ├── .env                # Environment configuration
 │   ├── main.py             # Application entry point
 │   ├── config.py           # Configuration handling
 │   ├── document.py         # Document model
@@ -80,8 +77,7 @@ document-conversion-pipeline/
 │   ├── base_converter.py   # Base converter interface
 │   ├── docling_converter.py # Docling document converter
 │   ├── conversion_option.py # Document conversion options
-│   └── watcher.py          # Directory watcher
-├── .env                    # Environment configuration
+│   └── watcher.py          # File System Event Handler
 └── README.md               # This file
 ```
 
@@ -91,4 +87,9 @@ To support additional document converters:
 
 1. Create a new converter class that implements `DocumentConverter`.
 2. Implement all required methods.
-3. Update `main.py` to use your new converter. 
+3. Update `main.py` to use your new converter.
+
+### TODO
+1. docling_converter.py: convert and convert_all should be sync
+2. A retry mechanism if a given conversion fails
+
