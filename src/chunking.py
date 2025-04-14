@@ -9,9 +9,7 @@ import re
 from document import Document
 
 from langchain_text_splitters import (
-    RecursiveCharacterTextSplitter,
     CharacterTextSplitter,
-    MarkdownTextSplitter,
     TokenTextSplitter,
 )
 
@@ -31,19 +29,34 @@ class ChunkingStrategy(ABC):
         Returns:
             A list of Document objects representing the chunks
         """
-        pass
+        raise NotImplementedError("Subclasses must implement this method")
 
     def clean_text(self, text: str) -> str:
-        """Clean text by removing base64 images from markdown.
+        """Normalize whitespace in text.
 
         Args:
             text: The text to clean
 
         Returns:
-            Cleaned text with normalized whitespace and no base64 images
+            Text cleaned of non-ascii characters, base64 images, and normalized whitespace
         """
-        text = re.sub(r"!\[.*?\]\(data:image/[^;]*;base64,[^)]*\)", "", text)
-        return text
+        # Remove base64 images
+        cleaned_text = re.sub(r"!\[.*?\]\(data:image/[^;]*;base64,[^)]*\)", "", text)
+        # Replace multiple newlines with a single newline
+        cleaned_text = re.sub(r"\n+", "\n", cleaned_text)
+        # Replace multiple spaces with a single space
+        cleaned_text = re.sub(r"\s+", " ", cleaned_text)
+        # Replace multiple tabs with a single tab
+        cleaned_text = re.sub(r"\t+", "\t", cleaned_text)
+        # Replace multiple carriage returns with a single carriage return
+        cleaned_text = re.sub(r"\r+", "\r", cleaned_text)
+        # Replace multiple form feeds with a single form feed
+        cleaned_text = re.sub(r"\f+", "\f", cleaned_text)
+        # Replace multiple vertical tabs with a single vertical tab
+        cleaned_text = re.sub(r"\v+", "\v", cleaned_text)
+        # Remove non ascii characters
+        cleaned_text = re.sub(r"[^\x00-\x7F]+", "", cleaned_text)
+        return cleaned_text
 
 
 class LangChainChunking(ChunkingStrategy):
@@ -51,8 +64,8 @@ class LangChainChunking(ChunkingStrategy):
 
     def __init__(
         self,
-        splitter_type: str = "recursive",
-        chunk_size: int = 5000,
+        splitter_type: str = "tiktoken",
+        chunk_size: int = 8000,
         chunk_overlap: int = 200,
         separators: Optional[List[str]] = None,
         **kwargs: Any,
@@ -60,7 +73,7 @@ class LangChainChunking(ChunkingStrategy):
         """Initialize the LangChain chunking strategy.
 
         Args:
-            splitter_type: Type of text splitter to use ('recursive', 'character', 'markdown', 'token')
+            splitter_type: Type of text splitter to use ('character', 'token')
             chunk_size: Target size of each chunk in characters (or tokens for TokenTextSplitter)
             chunk_overlap: Number of characters/tokens to overlap between chunks
             separators: List of separators to use for splitting (for RecursiveCharacterTextSplitter)
@@ -78,22 +91,8 @@ class LangChainChunking(ChunkingStrategy):
         if separators is None:
             separators = ["\n\n", "\n", ". ", " ", ""]
 
-        if splitter_type == "recursive":
-            self.splitter = RecursiveCharacterTextSplitter(
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
-                separators=separators,
-                **kwargs,
-            )
-        elif splitter_type == "character":
+        if splitter_type == "character":
             self.splitter = CharacterTextSplitter(
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
-                separator=separators[0] if separators else "\n\n",
-                **kwargs,
-            )
-        elif splitter_type == "markdown":
-            self.splitter = MarkdownTextSplitter(
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
                 **kwargs,
@@ -107,7 +106,7 @@ class LangChainChunking(ChunkingStrategy):
         else:
             raise ValueError(
                 f"Invalid splitter_type: {splitter_type}. Must be one of: "
-                "recursive, character, markdown, token"
+                "character, token"
             )
 
     def chunk(self, document: Document) -> List[Document]:
@@ -152,76 +151,96 @@ class LangChainChunking(ChunkingStrategy):
 
 
 class AgenticChunking(ChunkingStrategy):
-    """Chunking strategy that uses an LLM to determine natural breakpoints in the text."""
+    """Chunking strategy that uses an LLM to determine natural breakpoints in the text"""
 
-    def __init__(self, model: Optional[OpenAIModel] = None, max_chunk_size: int = 5000):
-        """Initialize the agentic chunking strategy.
-
-        Args:
-            model: The language model to use for finding breakpoints
-            max_chunk_size: Maximum size of each chunk in characters
-        """
+    def __init__(self, model: OpenAIModel, max_chunk_size: int = 32000):
         self.max_chunk_size = max_chunk_size
         self.model = model
-        if model is None:
-            raise ValueError("A language model must be provided for AgenticChunking")
+
+    def _prepare_chunk(
+        self, document: Document, chunk_text: str, chunk_number: int
+    ) -> Document:
+        """Create a Document object for a chunk of text"""
+        meta_data = document.meta_data.copy() if document.meta_data else {}
+        meta_data["chunk"] = chunk_number
+        meta_data["chunk_size"] = len(chunk_text)
+        meta_data["splitter_type"] = "agentic"
+
+        chunk_id = None
+        if document.id:
+            chunk_id = f"{document.id}_{chunk_number}"
+        elif document.name:
+            chunk_id = f"{document.name}_{chunk_number}"
+
+        return Document(
+            id=chunk_id,
+            name=document.name,
+            meta_data=meta_data,
+            content=chunk_text,
+        )
 
     def chunk(self, document: Document) -> List[Document]:
-        """Split text into chunks using LLM to determine natural breakpoints based on context.
-
-        Args:
-            document: The document to split into chunks
-
-        Returns:
-            List of Document objects representing the chunks
-        """
+        """Split text into chunks using LLM to determine natural breakpoints based on context"""
         if len(document.content) <= self.max_chunk_size:
             return [document]
 
         chunks: List[Document] = []
         remaining_text = self.clean_text(document.content)
-        chunk_meta_data = document.meta_data
         chunk_number = 1
 
         while remaining_text:
-            prompt = f"""Analyze this text and determine a natural breakpoint within the first {self.max_chunk_size} characters.
-            Consider semantic completeness, paragraph boundaries, and topic transitions.
-            Return only the character position number of where to break the text:
-
-            {remaining_text[:self.max_chunk_size]}"""
+            prompt = self._create_breakpoint_prompt(remaining_text)
 
             try:
-                break_point = min(
-                    int(self.model.generate(prompt).strip()), self.max_chunk_size
-                )
-                print(f"Break point: {break_point}")
+                break_point = int(self.model.generate(prompt).strip())
             except Exception:
                 break_point = self.max_chunk_size
 
-            chunk = remaining_text[:break_point].strip()
-            meta_data = chunk_meta_data.copy()
-            meta_data["chunk"] = chunk_number
-            meta_data["chunk_size"] = len(chunk)
-
-            chunk_id = None
-            if document.id:
-                chunk_id = f"{document.id}_{chunk_number}"
-            elif document.name:
-                chunk_id = f"{document.name}_{chunk_number}"
-
-            chunks.append(
-                Document(
-                    id=chunk_id,
-                    name=document.name,
-                    meta_data=meta_data,
-                    content=chunk,
-                )
-            )
+            chunk_text = remaining_text[:break_point].strip()
+            chunks.append(self._prepare_chunk(document, chunk_text, chunk_number))
             chunk_number += 1
-
             remaining_text = remaining_text[break_point:].strip()
 
             if not remaining_text:
                 break
 
         return chunks
+
+    async def chunk_async(self, document: Document) -> List[Document]:
+        """Split text into chunks asynchronously using LLM to determine natural breakpoints"""
+        if len(document.content) <= self.max_chunk_size:
+            return [document]
+
+        chunks: List[Document] = []
+        remaining_text = self.clean_text(document.content)
+        chunk_number = 1
+
+        while remaining_text:
+            prompt = self._create_breakpoint_prompt(remaining_text)
+
+            try:
+                break_point = int((await self.model.generate_async(prompt)).strip())
+            except Exception:
+                break_point = self.max_chunk_size
+
+            chunk_text = remaining_text[:break_point].strip()
+            chunks.append(self._prepare_chunk(document, chunk_text, chunk_number))
+            chunk_number += 1
+            remaining_text = remaining_text[break_point:].strip()
+
+            if not remaining_text:
+                break
+
+        return chunks
+
+    def _create_breakpoint_prompt(self, text: str) -> str:
+        """Create a prompt for finding a natural breakpoint in text"""
+        return f"""Analyze this text and determine a natural breakpoint within the first {self.max_chunk_size} characters.
+        Consider semantic completeness, paragraph boundaries, and topic transitions.
+        **NEVER** break words, sentences or paragraphs.
+        **NEVER** break tables or lists.
+        **NEVER** break code blocks.
+        **NEVER** break links.
+        Return only the character position number of where to break the text:
+
+        {text[:self.max_chunk_size]}"""
