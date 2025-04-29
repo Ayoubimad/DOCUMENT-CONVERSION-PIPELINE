@@ -144,9 +144,7 @@ document-conversion-pipeline/
 │   ├── docling_converter.py # Docling document converter
 │   ├── conversion_option.py # Document conversion options
 │   ├── watcher.py          # File System Event Handler
-│   ├── chunking.py         # Document chunking strategies
 │   ├── logging_utils.py    # Logging utilities
-│   └── llm.py              # LLM integration
 ├── requirements.txt        # Python dependencies
 ├── README.md               # This file
 └── .env                    # Environment configuration (create this)
@@ -176,9 +174,4 @@ The application has several parameters that can be tuned for performance:
 - **File not being processed**: Check if the file is stable and that the input directory is being watched.
 - **Timeouts during conversion**: Increase the `DOCLING_TIMEOUT` setting.
 - **High CPU usage**: Reduce the `MAX_CONCURRENT_CONVERSIONS` setting.
-- **Logging issues**: Ensure `colorlog` is installed for colored logs.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
 

@@ -55,11 +55,9 @@ def get_log_level(level: Union[str, int]) -> int:
     Raises:
         ValueError: If level is an invalid string
     """
-    # If already an integer, assume it's a valid level
     if isinstance(level, int):
         return level
 
-    # Otherwise convert from string
     levels = {
         "DEBUG": logging.DEBUG,
         "INFO": logging.INFO,
@@ -198,14 +196,12 @@ def setup_logger(name: str, config: Optional[LoggingConfig] = None) -> logging.L
 
     logger = logging.getLogger(name)
 
-    # Clear any existing handlers
     if logger.handlers:
         logger.handlers.clear()
 
     level = get_log_level(config.level)
     logger.setLevel(level)
 
-    # Add console handler
     console_handler = create_console_handler(level)
     console_formatter = create_console_formatter(
         config.include_timestamps, config.log_format
@@ -213,7 +209,6 @@ def setup_logger(name: str, config: Optional[LoggingConfig] = None) -> logging.L
     console_handler.setFormatter(console_formatter)
     logger.addHandler(console_handler)
 
-    # Add file handler if requested
     if config.log_to_file and config.log_file_path:
         file_handler = create_file_handler(config.log_file_path, level)
         file_formatter = create_file_formatter(
@@ -235,17 +230,14 @@ def configure_root_logger(config: Optional[LoggingConfig] = None) -> None:
     if config is None:
         config = LoggingConfig()
 
-    # Get the root logger
     root_logger = logging.getLogger()
 
-    # Clear any existing handlers
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
 
     level = get_log_level(config.level)
     root_logger.setLevel(level)
 
-    # Add console handler
     console_handler = create_console_handler(level)
     console_formatter = create_console_formatter(
         config.include_timestamps, config.log_format
@@ -253,7 +245,6 @@ def configure_root_logger(config: Optional[LoggingConfig] = None) -> None:
     console_handler.setFormatter(console_formatter)
     root_logger.addHandler(console_handler)
 
-    # Add file handler if requested
     if config.log_to_file and config.log_file_path:
         file_handler = create_file_handler(config.log_file_path, level)
         file_formatter = create_file_formatter(
@@ -262,10 +253,8 @@ def configure_root_logger(config: Optional[LoggingConfig] = None) -> None:
         file_handler.setFormatter(file_formatter)
         root_logger.addHandler(file_handler)
 
-    # Set specific loggers to WARNING to reduce noise
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("requests").setLevel(logging.WARNING)
 
 
-# Provide a shorter alias for backward compatibility
 create_logger = setup_logger

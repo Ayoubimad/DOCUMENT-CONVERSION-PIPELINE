@@ -35,11 +35,9 @@ class Application:
         self.running = False
         self.event_loop: Optional[asyncio.AbstractEventLoop] = None
 
-        # Set up signal handling
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
 
-        # Initialize watcher
         self.watcher = DocumentWatcher(
             self.converter, settings.INPUT_DIR, settings.OUTPUT_DIR
         )
@@ -54,16 +52,13 @@ class Application:
         self.running = True
         logger.info("Starting document conversion pipeline")
 
-        # Get current event loop
         self.event_loop = asyncio.get_running_loop()
 
         try:
-            # Start the watcher
             self.watcher.start(process_existing=self.process_existing)
             logger.info(f"Watching input directory: {settings.INPUT_DIR}")
             logger.info(f"Saving output to: {settings.OUTPUT_DIR}")
 
-            # Keep the application running
             while self.running:
                 await asyncio.sleep(0.1)
 
@@ -92,18 +87,15 @@ class Application:
         logger.info("Stopping application...")
         self.running = False
 
-        # Stop the watcher
         try:
             self.watcher.stop()
             logger.info("Watcher stopped")
         except Exception as e:
             logger.error(f"Error stopping watcher: {e}", exc_info=True)
 
-        # Clean up async resources
         if self.event_loop and self.event_loop.is_running():
             asyncio.run_coroutine_threadsafe(self.cleanup_async(), self.event_loop)
         else:
-            # If we're not in an event loop, create a new one
             asyncio.run(self.cleanup_async())
 
     def run(self) -> None:
@@ -161,7 +153,6 @@ def configure_logging_from_args(args):
     Args:
         args: Parsed command line arguments
     """
-    # Override settings based on command line args
     if args.log_level:
         settings.LOG_LEVEL = args.log_level
 
@@ -172,19 +163,15 @@ def configure_logging_from_args(args):
     if args.no_timestamps:
         settings.INCLUDE_TIMESTAMPS = False
 
-    # Apply the logging configuration
     settings.configure_logging()
 
 
 def main() -> None:
     """Application entry point."""
-    # Parse command line arguments
     args = parse_args()
 
-    # Configure logging based on command line arguments
     configure_logging_from_args(args)
 
-    # Override directory settings from command line
     if args.input_dir:
         settings.INPUT_DIR = args.input_dir
         logger.debug(f"Input directory overridden to {settings.INPUT_DIR}")
@@ -192,11 +179,9 @@ def main() -> None:
         settings.OUTPUT_DIR = args.output_dir
         logger.debug(f"Output directory overridden to {settings.OUTPUT_DIR}")
 
-    # Create required directories
     os.makedirs(settings.INPUT_DIR, exist_ok=True)
     os.makedirs(settings.OUTPUT_DIR, exist_ok=True)
 
-    # Create and run the application
     app = Application(process_existing=args.process_existing)
     app.run()
 
